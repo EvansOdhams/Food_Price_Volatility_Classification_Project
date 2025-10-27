@@ -269,6 +269,67 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
+@st.cache_resource
+def load_models():
+    """Load trained machine learning models"""
+    models = {}
+    scalers = {}
+    
+    try:
+        # Load Decision Tree
+        if os.path.exists('models/decision_tree_model.pkl'):
+            with open('models/decision_tree_model.pkl', 'rb') as f:
+                models['decision_tree'] = pickle.load(f)
+        
+        # Load Random Forest
+        if os.path.exists('models/random_forest_model.pkl'):
+            with open('models/random_forest_model.pkl', 'rb') as f:
+                models['random_forest'] = pickle.load(f)
+        
+        # Load XGBoost
+        if os.path.exists('models/xgboost_model.pkl'):
+            with open('models/xgboost_model.pkl', 'rb') as f:
+                models['xgboost'] = pickle.load(f)
+        
+        # Load Logistic Regression with scaler
+        if os.path.exists('models/logistic_regression_model.pkl'):
+            with open('models/logistic_regression_model.pkl', 'rb') as f:
+                models['logistic_regression'] = pickle.load(f)
+            with open('models/logistic_regression_scaler.pkl', 'rb') as f:
+                scalers['logistic_regression'] = pickle.load(f)
+        
+        # Load SVM with scaler
+        if os.path.exists('models/svm_model.pkl'):
+            with open('models/svm_model.pkl', 'rb') as f:
+                models['svm'] = pickle.load(f)
+            with open('models/svm_scaler.pkl', 'rb') as f:
+                scalers['svm'] = pickle.load(f)
+        
+        # Load Neural Network with scaler
+        if os.path.exists('models/neural_network_model.pkl'):
+            with open('models/neural_network_model.pkl', 'rb') as f:
+                models['neural_network'] = pickle.load(f)
+            with open('models/neural_network_scaler.pkl', 'rb') as f:
+                scalers['neural_network'] = pickle.load(f)
+        
+        # Load feature names and label mapping
+        if os.path.exists('models/feature_names.pkl'):
+            with open('models/feature_names.pkl', 'rb') as f:
+                feature_names = pickle.load(f)
+        else:
+            feature_names = None
+            
+        if os.path.exists('models/label_mapping.pkl'):
+            with open('models/label_mapping.pkl', 'rb') as f:
+                label_mapping = pickle.load(f)
+        else:
+            label_mapping = None
+        
+        return models, scalers, feature_names, label_mapping
+    except Exception as e:
+        st.warning(f"Could not load some models: {e}")
+        return {}, {}, None, None
+
 @st.cache_data
 def load_real_data():
     """Load actual Kenyan food price data from World Bank dataset"""
@@ -702,7 +763,51 @@ def show_model_performance():
     st.markdown("### 📋 Detailed Results")
     st.dataframe(results_df, use_container_width=True)
 
+def predict_with_models(models, scalers, features):
+    """Make predictions using loaded models"""
+    predictions = {}
+    
+    # Prepare features for different models
+    features_df = pd.DataFrame([features])
+    
+    # Decision Tree & Random Forest (no scaling needed)
+    if 'decision_tree' in models:
+        predictions['Decision Tree'] = models['decision_tree'].predict(features_df)[0]
+    
+    if 'random_forest' in models:
+        predictions['Random Forest'] = models['random_forest'].predict(features_df)[0]
+    
+    # XGBoost (no scaling needed)
+    if 'xgboost' in models:
+        predictions['XGBoost'] = models['xgboost'].predict(features_df)[0]
+    
+    # Logistic Regression (scaling needed)
+    if 'logistic_regression' in models and 'logistic_regression' in scalers:
+        features_scaled = scalers['logistic_regression'].transform(features_df)
+        predictions['Logistic Regression'] = models['logistic_regression'].predict(features_scaled)[0]
+    
+    # SVM (scaling needed)
+    if 'svm' in models and 'svm' in scalers:
+        features_scaled = scalers['svm'].transform(features_df)
+        predictions['SVM'] = models['svm'].predict(features_scaled)[0]
+    
+    # Neural Network (scaling needed)
+    if 'neural_network' in models and 'neural_network' in scalers:
+        features_scaled = scalers['neural_network'].transform(features_df)
+        predictions['Neural Network'] = models['neural_network'].predict(features_scaled)[0]
+    
+    # Get most common prediction
+    if predictions:
+        from collections import Counter
+        most_common = Counter(predictions.values()).most_common(1)[0][0]
+        return most_common, predictions
+    else:
+        return None, {}
+
 def show_predictions():
+    # Load models
+    models, scalers, feature_names, label_mapping = load_models()
+    
     st.markdown("## 🔮 Live Volatility Predictions - Kenya Market")
     st.info("Enter commodity price data to predict volatility class. All prices are in KES (Kenyan Shillings).")
     
@@ -761,39 +866,85 @@ def show_predictions():
         
         monthly_change = ((current_price - previous_price) / previous_price) * 100
         
-        if abs(monthly_change) <= 5:
-            predicted_class = "Low"
-            confidence = 0.95
-            color = "#2ecc71"
-            bg_color = "#d4edda"
-        elif abs(monthly_change) <= 15:
-            predicted_class = "Medium"
-            confidence = 0.85
-            color = "#f39c12"
-            bg_color = "#fff3cd"
-        elif abs(monthly_change) <= 30:
-            predicted_class = "High"
-            confidence = 0.75
-            color = "#e67e22"
-            bg_color = "#fdebd0"
+        # Prepare features for model prediction
+        # Create a feature vector matching the training data structure
+        features = {
+            'monthly_price_change': monthly_change,
+            'price_change_1m': price_change_1m,
+            'price_change_3m': price_change_3m,
+            'price_change_6m': price_change_3m * 2,  # Approximation
+            'price_change_12m': price_change_3m * 4,  # Approximation
+            'price_yoy_change': price_change_3m * 4,  # Approximation
+            'rolling_volatility_3m': rolling_volatility,
+            'rolling_volatility_6m': rolling_volatility * 1.2,  # Approximation
+            'rolling_volatility_12m': rolling_volatility * 1.5,  # Approximation
+            'rolling_cv_3m': rolling_volatility / current_price if current_price > 0 else 0,
+            'rolling_cv_6m': rolling_volatility / current_price * 1.2 if current_price > 0 else 0,
+            'rolling_cv_12m': rolling_volatility / current_price * 1.5 if current_price > 0 else 0,
+            'price_momentum_3m': price_change_3m,  # Approximation
+            'price_range_rel': monthly_change / 100,  # Relative price range
+            'month': 1,  # Default values
+            'quarter': 1,
+            'year': 2024,
+            'commodity_encoded': ['maize', 'potatoes', 'sorghum'].index(commodity),
+            'mkt_name_encoded': 0,  # Default market encoding
+            'adm1_encoded': 0,  # Default region encoding
+            'obs_count': 100  # Default observation count
+        }
+        
+        # Try to use actual models if available
+        if models:
+            try:
+                predicted_class, all_predictions = predict_with_models(models, scalers, features)
+                
+                # Display results from all models
+                if predicted_class:
+                    st.markdown("#### 🤖 Model Ensemble Prediction")
+                    ensemble_results = pd.DataFrame([
+                        {'Model': k, 'Prediction': v} 
+                        for k, v in all_predictions.items()
+                    ])
+                    st.dataframe(ensemble_results, use_container_width=True)
+            except Exception as e:
+                st.warning(f"Could not use ML models: {e}. Using rule-based prediction.")
+                predicted_class = None
         else:
-            predicted_class = "Extreme"
-            confidence = 0.65
-            color = "#e74c3c"
-            bg_color = "#f8d7da"
+            st.info("ℹ️ Models not loaded. Using rule-based prediction.")
+            predicted_class = None
+        
+        # Fallback to rule-based prediction if models failed or not available
+        if not predicted_class:
+            if abs(monthly_change) <= 5:
+                predicted_class = "Low"
+            elif abs(monthly_change) <= 15:
+                predicted_class = "Medium"
+            elif abs(monthly_change) <= 30:
+                predicted_class = "High"
+            else:
+                predicted_class = "Extreme"
+        
+        # Color coding based on volatility class
+        color_map = {
+            "Low": {"color": "#2ecc71", "bg": "#d4edda"},
+            "Medium": {"color": "#f39c12", "bg": "#fff3cd"},
+            "High": {"color": "#e67e22", "bg": "#fdebd0"},
+            "Extreme": {"color": "#e74c3c", "bg": "#f8d7da"}
+        }
+        
+        colors = color_map[predicted_class]
         
         col1, col2, col3 = st.columns(3)
         with col1:
             st.markdown(f"""
-                <div style="background: {bg_color}; padding: 1.5rem; border-radius: 10px; text-align: center; border: 3px solid {color};">
-                    <p style="color: {color}; font-weight: bold; margin: 0; font-size: 1.1rem;">Predicted Class</p>
-                    <h1 style="color: {color}; margin: 10px 0;">{predicted_class}</h1>
+                <div style="background: {colors['bg']}; padding: 1.5rem; border-radius: 10px; text-align: center; border: 3px solid {colors['color']};">
+                    <p style="color: {colors['color']}; font-weight: bold; margin: 0; font-size: 1.1rem;">Predicted Class</p>
+                    <h1 style="color: {colors['color']}; margin: 10px 0;">{predicted_class}</h1>
                 </div>
             """, unsafe_allow_html=True)
         with col2:
-            st.metric("Confidence", f"{confidence:.2%}")
-        with col3:
             st.metric("Monthly Change", f"{monthly_change:.2f}%")
+        with col3:
+            st.metric("Price (KES)", f"{current_price:.1f}")
         
         st.markdown("### 💡 Interpretation")
         interpretations = {
